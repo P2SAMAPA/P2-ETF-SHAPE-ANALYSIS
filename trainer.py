@@ -1,6 +1,5 @@
 """
 Main training script for shape analysis.
-For each ETF, detect recovery segments, cluster shapes, and classify the most recent incomplete recovery.
 """
 
 import pandas as pd
@@ -22,19 +21,17 @@ def main():
 
     for universe_name, tickers in config.UNIVERSES.items():
         print(f"\n=== Universe: {universe_name} ===")
-        # Prepare prices for this universe
-        uni_prices = data_manager.prepare_prices_matrix(df, tickers)
-        if uni_prices.empty:
-            print(f"  No price data found for universe {universe_name}")
+        prices = data_manager.prepare_prices_matrix(df, tickers)
+        if prices.empty:
             continue
 
         universe_results = {}
         for ticker in tickers:
-            if ticker not in uni_prices.columns:
+            if ticker not in prices.columns:
                 continue
-            price_series = uni_prices[ticker].dropna()
+            price_series = prices[ticker].dropna()
             if len(price_series) < 100:
-                print(f"  {ticker}: insufficient data ({len(price_series)} points)")
+                print(f"  {ticker}: insufficient data")
                 continue
 
             sa = ShapeAnalyzer(
@@ -49,26 +46,28 @@ def main():
             if "error" in result:
                 print(f"  {ticker}: {result['error']} (recoveries={result.get('num_recoveries',0)})")
                 continue
-            else:
-                print(f"  {ticker}: {result['num_recoveries']} recoveries, {len(set(labels))} clusters")
+            print(f"  {ticker}: {result['num_recoveries']} recoveries, {len(labels)} clusters")
 
-            # Classify the most recent recovery (last segment)
+            # Most recent recovery
             all_segments = result["segments"]
-            if len(all_segments) == 0:
-                continue
-            last_segment = all_segments[-1]
-            closest_cluster, dist = sa.classify_shape(last_segment, centers)
+            last_seg = all_segments[-1]
+            closest_cluster, dist = sa.classify_shape(last_seg, centers)
             shape_name = result["cluster_names"].get(closest_cluster, "unknown")
             confidence = 1.0 / (1.0 + dist) if dist < 1e8 else 0.0
+
+            # Convert cluster_names keys to strings for JSON serialization
+            cluster_names_str = {str(k): v for k, v in result["cluster_names"].items()}
+            # Convert cluster_distribution keys to strings (already str, but ensure)
+            cluster_dist_str = {str(k): v for k, v in result.get("cluster_distribution", {}).items()}
 
             universe_results[ticker] = {
                 "current_shape": shape_name,
                 "confidence": float(confidence),
                 "procrustes_distance": float(dist),
                 "num_recoveries": result["num_recoveries"],
-                "cluster_distribution": {str(k): int((labels == k).sum()) for k in range(config.N_CLUSTERS)},
-                "cluster_names": result["cluster_names"],
-                "last_recovery_normalized": last_segment.tolist()
+                "cluster_distribution": cluster_dist_str,
+                "cluster_names": cluster_names_str,
+                "last_recovery_normalized": last_seg.tolist()
             }
         all_results[universe_name] = universe_results
 
