@@ -22,6 +22,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+def shape_to_score(shape):
+    mapping = {"V": 1, "U": 0, "L": -1}
+    return mapping.get(shape, 0)
+
 def shape_to_action(shape):
     mapping = {"V": "BUY", "U": "HOLD", "L": "SELL"}
     return mapping.get(shape, "HOLD")
@@ -85,8 +89,55 @@ if not universes:
     st.warning("No universe data.")
     st.stop()
 
+# ================== RECOMMENDATION SECTION ==================
+st.header("🎯 Top ETFs to Buy (based on shape confidence and Procrustes distance)")
+
+all_recommendations = []  # list of (universe, ticker, score, shape, confidence, distance)
+for universe_name, uni_data in universes.items():
+    for ticker, info in uni_data.items():
+        shape = info.get("current_shape", "?")
+        score = shape_to_score(shape)
+        confidence = info.get("confidence", 0.0)
+        # Use product of score and confidence as composite metric; ensure non-negative for V (score=1)
+        # For U (score=0) and L (score=-1), we still compute but will sort descending.
+        composite = score * confidence
+        # Alternatively use: composite = (score+1) * confidence? But we want V highest, then U, then L.
+        # To avoid negative scores pushing down, we can store both.
+        all_recommendations.append({
+            "Universe": universe_name,
+            "Ticker": ticker,
+            "Shape": shape,
+            "Action": shape_to_action(shape),
+            "Confidence": f"{confidence*100:.1f}%",
+            "Procrustes Dist": f"{info['procrustes_distance']:.3f}",
+            "Composite Score": composite,
+            "confidence_raw": confidence,
+            "distance": info['procrustes_distance']
+        })
+# Sort by composite descending
+df_rec = pd.DataFrame(all_recommendations)
+df_rec = df_rec.sort_values("Composite Score", ascending=False)
+top3 = df_rec.head(3)
+# Display as hero cards
+col1, col2, col3 = st.columns(3)
+for i, row in top3.iterrows():
+    with eval(f"col{i+1}"):
+        st.markdown(f"##### {row['Universe']} – {row['Ticker']}")
+        st.markdown(f"**Action:** {row['Action']}")
+        st.markdown(f"**Confidence:** {row['Confidence']}")
+        st.markdown(f"**Procrustes distance:** {row['Procrustes Dist']}")
+        st.markdown(f"**Shape:** {row['Shape']}")
+        if row['Action'] == "BUY":
+            st.markdown('<div class="buy">BUY SIGNAL</div>', unsafe_allow_html=True)
+        elif row['Action'] == "HOLD":
+            st.markdown('<div class="hold">HOLD SIGNAL</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="sell">SELL SIGNAL</div>', unsafe_allow_html=True)
+st.divider()
+
+# ================== UNIVERSE SELECTION ==================
 universe_names = list(universes.keys())
-selected = st.selectbox("Select Universe", universe_names)
+selected = st.selectbox("Select Universe to view details", universe_names)
 
 if selected:
     uni_data = universes[selected]
@@ -107,8 +158,6 @@ if selected:
             "Procrustes Dist": f"{info.get('procrustes_distance',0):.3f}"
         })
     df = pd.DataFrame(rows)
-    
-    # Apply styling using .map (new pandas) instead of .applymap (deprecated)
     styled_df = df.style.map(color_action, subset=['Action'])
     st.subheader(f"📊 Trading Signals – {selected}")
     st.dataframe(styled_df, use_container_width=True, hide_index=True)
@@ -154,4 +203,4 @@ if selected:
         else:
             st.info("No shape data available for this ETF.")
 
-st.caption("Signal logic: V‑shape → BUY (fast rebound), U‑shape → HOLD (slow recovery), L‑shape → SELL (stagnation). | Data from " + OUTPUT_REPO)
+st.caption("Top recommendation uses composite score = shape_score (V=1, U=0, L=-1) × confidence. Higher is better for buying. Data from " + OUTPUT_REPO)
