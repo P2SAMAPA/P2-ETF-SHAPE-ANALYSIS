@@ -1,16 +1,13 @@
 """
-Shape analysis using Kendall's shape space and Procrustes distance.
-Detects recovery segments, aligns them, classifies into V/U/L shapes.
+Shape analysis with cluster‑based naming.
 """
 
 import numpy as np
 from scipy.interpolate import interp1d
-from scipy.spatial.distance import pdist, squareform, cdist
 from collections import Counter
-import warnings
 
 class ShapeAnalyzer:
-    def __init__(self, trough_window=5, peak_threshold=0.05, min_recovery_days=5,
+    def __init__(self, trough_window=5, peak_threshold=0.08, min_recovery_days=5,
                  interp_points=50, n_clusters=3, procrustes_iter=10):
         self.trough_window = trough_window
         self.peak_threshold = peak_threshold
@@ -22,24 +19,20 @@ class ShapeAnalyzer:
         self.cluster_labels_ = None
 
     def find_recovery_segments(self, prices):
-        """prices: pd.Series indexed by datetime."""
+        # (same as before – no change)
         segments = []
         values = prices.values
         n = len(values)
-
-        # Find troughs (local minima over window)
         trough_idx = []
         for i in range(self.trough_window, n - self.trough_window):
             window = values[i - self.trough_window : i + self.trough_window + 1]
             if values[i] == min(window):
                 trough_idx.append(i)
-
         if not trough_idx:
             return []
-
         for ti in trough_idx:
             trough_price = values[ti]
-            max_lookahead = min(n, ti + 252)  # up to one year
+            max_lookahead = min(n, ti + 252)
             peak_candidate = None
             for j in range(ti+1, max_lookahead):
                 if values[j] >= trough_price * (1 + self.peak_threshold):
@@ -50,25 +43,20 @@ class ShapeAnalyzer:
             segment_prices = values[ti:peak_candidate+1]
             if len(segment_prices) < self.min_recovery_days:
                 continue
-            # Normalise time to [0,1]
             time_norm = np.linspace(0, 1, len(segment_prices))
-            # Normalise price to [0,1]
             pmin = segment_prices.min()
             pmax = segment_prices.max()
             if pmax == pmin:
                 continue
             price_norm = (segment_prices - pmin) / (pmax - pmin)
-            # Interpolate to fixed number of points
             interp_time = np.linspace(0, 1, self.interp_points)
             f = interp1d(time_norm, price_norm, kind='linear', fill_value='extrapolate')
             interp_norm = f(interp_time)
             interp_norm = np.clip(interp_norm, 0, 1)
-            segment = np.column_stack([interp_time, interp_norm])
-            segments.append(segment)
+            segments.append(np.column_stack([interp_time, interp_norm]))
         return segments
 
     def _procrustes_align(self, X, Y):
-        """Procrustes superimposition: translate, scale, rotate Y to best fit X."""
         X_cent = X - X.mean(axis=0)
         Y_cent = Y - Y.mean(axis=0)
         size_X = np.sqrt(np.sum(X_cent**2))
@@ -136,44 +124,33 @@ class ShapeAnalyzer:
                 best_idx = i
         return best_idx, best_dist
 
-    def assign_shape_names(self, labels, segments):
-        """
-        Heuristic naming based on curvature and slopes – relaxed for better differentiation.
-        """
-        names = []
-        for seg in segments:
-            y = seg[:, 1]
-            d2 = np.gradient(np.gradient(y))
-            mid = len(d2)//2
-            curv = abs(d2[mid])
-            half = len(y)//2
-            slope1 = (y[half] - y[0]) / half if half > 0 else 0
-            slope2 = (y[-1] - y[half]) / (len(y)-half) if (len(y)-half)>0 else 0
-            # Relaxed thresholds
-            if slope1 < -0.3 and slope2 > 0.3:
-                name = "V"
-            elif curv < 0.8 and abs(slope1) < 0.1 and abs(slope2) < 0.1:
-                name = "U"
-            else:
-                name = "L"
-            names.append(name)
-        cluster_name_map = {}
-        for k in range(self.n_clusters):
-            mask = labels == k
-            if np.sum(mask) == 0:
-                cluster_name_map[k] = "unknown"
-            else:
-                cluster_names = [names[i] for i, m in enumerate(mask) if m]
-                most_common = Counter(cluster_names).most_common(1)[0][0]
-                cluster_name_map[k] = most_common
-        return cluster_name_map
+    def _name_cluster_from_center(self, center):
+        """Return V, U, or L based on the shape of the cluster center."""
+        y = center[:, 1]
+        half = len(y)//2
+        if half == 0:
+            return "L"
+        slope1 = (y[half] - y[0]) / half
+        slope2 = (y[-1] - y[half]) / (len(y)-half)
+        curv = np.abs(np.gradient(np.gradient(y))).mean()
+        # Rule-based naming
+        if slope1 < -0.2 and slope2 > 0.2:
+            return "V"
+        elif curv < 0.5 and abs(slope1) < 0.1 and abs(slope2) < 0.1:
+            return "U"
+        else:
+            return "L"
+
+    def assign_cluster_names(self, centers):
+        """Return dict mapping cluster index to shape name."""
+        return {i: self._name_cluster_from_center(center) for i, center in enumerate(centers)}
 
     def analyze(self, prices):
         segments = self.find_recovery_segments(prices)
         if len(segments) < self.n_clusters:
             return {"error": "insufficient segments", "num_recoveries": len(segments)}, None, None
         labels, centers = self.cluster_shapes(segments)
-        name_map = self.assign_shape_names(labels, segments)
+        name_map = self.assign_cluster_names(centers)
         return {
             "segments": segments,
             "labels": labels,
