@@ -18,17 +18,14 @@ def main():
         return
 
     df = data_manager.load_master_data()
-    prices = data_manager.prepare_prices_matrix(df, [])  # will be updated later per universe
     all_results = {}
 
     for universe_name, tickers in config.UNIVERSES.items():
         print(f"\n=== Universe: {universe_name} ===")
-        # Filter prices for the current universe
-        uni_prices = prices[tickers] if all(t in prices.columns for t in tickers) else pd.DataFrame()
+        # Prepare prices for this universe
+        uni_prices = data_manager.prepare_prices_matrix(df, tickers)
         if uni_prices.empty:
-            # Fallback: prepare using data_manager with specific tickers
-            uni_prices = data_manager.prepare_prices_matrix(df, tickers)
-        if uni_prices.empty:
+            print(f"  No price data found for universe {universe_name}")
             continue
 
         universe_results = {}
@@ -53,7 +50,7 @@ def main():
                 print(f"  {ticker}: {result['error']} (recoveries={result.get('num_recoveries',0)})")
                 continue
             else:
-                print(f"  {ticker}: {result['num_recoveries']} recoveries, {len(labels)} clusters")
+                print(f"  {ticker}: {result['num_recoveries']} recoveries, {len(set(labels))} clusters")
 
             # Classify the most recent recovery (last segment)
             all_segments = result["segments"]
