@@ -92,15 +92,13 @@ if not universes:
 # ================== RECOMMENDATION SECTION ==================
 st.header("🎯 Top ETFs to Buy (based on shape confidence and Procrustes distance)")
 
-all_recommendations = []  # list of (universe, ticker, score, shape, confidence, distance)
+all_recommendations = []
 for universe_name, uni_data in universes.items():
     for ticker, info in uni_data.items():
         shape = info.get("current_shape", "?")
         score = shape_to_score(shape)
         confidence = info.get("confidence", 0.0)
-        # Composite score: shape_score * confidence (positive for V, zero for U, negative for L)
         composite = score * confidence
-        # Also compute a "buy_score" that is positive only for V: shape_score * confidence
         all_recommendations.append({
             "Universe": universe_name,
             "Ticker": ticker,
@@ -112,14 +110,14 @@ for universe_name, uni_data in universes.items():
             "confidence_raw": confidence,
             "distance": info['procrustes_distance']
         })
-# Sort by composite descending (V with high confidence at top)
 df_rec = pd.DataFrame(all_recommendations)
 df_rec = df_rec.sort_values("Composite Score", ascending=False)
 top3 = df_rec.head(3)
-# Display as hero cards
-col1, col2, col3 = st.columns(3)
+
+# Display top 3 as hero cards
+cols = st.columns(3)
 for i, row in top3.iterrows():
-    with eval(f"col{i+1}"):
+    with cols[i]:
         st.markdown(f"##### {row['Universe']} – {row['Ticker']}")
         st.markdown(f"**Action:** {row['Action']}")
         st.markdown(f"**Confidence:** {row['Confidence']}")
