@@ -98,11 +98,9 @@ for universe_name, uni_data in universes.items():
         shape = info.get("current_shape", "?")
         score = shape_to_score(shape)
         confidence = info.get("confidence", 0.0)
-        # Use product of score and confidence as composite metric; ensure non-negative for V (score=1)
-        # For U (score=0) and L (score=-1), we still compute but will sort descending.
+        # Composite score: shape_score * confidence (positive for V, zero for U, negative for L)
         composite = score * confidence
-        # Alternatively use: composite = (score+1) * confidence? But we want V highest, then U, then L.
-        # To avoid negative scores pushing down, we can store both.
+        # Also compute a "buy_score" that is positive only for V: shape_score * confidence
         all_recommendations.append({
             "Universe": universe_name,
             "Ticker": ticker,
@@ -114,7 +112,7 @@ for universe_name, uni_data in universes.items():
             "confidence_raw": confidence,
             "distance": info['procrustes_distance']
         })
-# Sort by composite descending
+# Sort by composite descending (V with high confidence at top)
 df_rec = pd.DataFrame(all_recommendations)
 df_rec = df_rec.sort_values("Composite Score", ascending=False)
 top3 = df_rec.head(3)
