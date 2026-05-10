@@ -5,9 +5,9 @@ Detects recovery segments, aligns them, classifies into V/U/L shapes.
 
 import numpy as np
 from scipy.interpolate import interp1d
-from scipy.spatial.distance import cdist
-from sklearn.cluster import KMeans
-from collections import defaultdict
+from scipy.spatial.distance import pdist, squareform, cdist
+from collections import Counter
+import warnings
 
 class ShapeAnalyzer:
     def __init__(self, trough_window=5, peak_threshold=0.10, min_recovery_days=5,
@@ -22,12 +22,8 @@ class ShapeAnalyzer:
         self.cluster_labels_ = None
 
     def find_recovery_segments(self, prices):
-        """
-        prices: pd.Series indexed by datetime.
-        Returns list of segments, each segment is a 2D array of (normalized time, normalized price).
-        """
+        """prices: pd.Series indexed by datetime."""
         segments = []
-        dates = prices.index
         values = prices.values
         n = len(values)
 
@@ -41,11 +37,9 @@ class ShapeAnalyzer:
         if not trough_idx:
             return []
 
-        # For each trough, find subsequent peak with sufficient gain
         for ti in trough_idx:
             trough_price = values[ti]
-            # look forward up to 1 year (252 days) for a peak
-            max_lookahead = min(n, ti + 252)
+            max_lookahead = min(n, ti + 252)  # up to one year
             peak_candidate = None
             for j in range(ti+1, max_lookahead):
                 if values[j] >= trough_price * (1 + self.peak_threshold):
@@ -53,38 +47,30 @@ class ShapeAnalyzer:
                     break
             if peak_candidate is None:
                 continue
-            # Extract segment from trough to peak
             segment_prices = values[ti:peak_candidate+1]
             if len(segment_prices) < self.min_recovery_days:
                 continue
             # Normalise time to [0,1]
             time_norm = np.linspace(0, 1, len(segment_prices))
             # Normalise price to [0,1]
-            price_min = segment_prices.min()
-            price_max = segment_prices.max()
-            if price_max == price_min:
+            pmin = segment_prices.min()
+            pmax = segment_prices.max()
+            if pmax == pmin:
                 continue
-            price_norm = (segment_prices - price_min) / (price_max - price_min)
-            # Build 2D points: x = time, y = price
-            segment = np.column_stack([time_norm, price_norm])
+            price_norm = (segment_prices - pmin) / (pmax - pmin)
             # Interpolate to fixed number of points
             interp_time = np.linspace(0, 1, self.interp_points)
-            f_x = interp1d(time_norm, segment_prices, kind='linear', fill_value='extrapolate')
-            f_y = interp1d(time_norm, price_norm, kind='linear', fill_value='extrapolate')
-            interp_prices = f_x(interp_time)
-            interp_norm = f_y(interp_time)
-            # Re-normalise after interpolation (optional, but ensures [0,1] range)
-            interp_norm = (interp_norm - interp_norm.min()) / (interp_norm.max() - interp_norm.min() + 1e-8)
-            interp_segment = np.column_stack([interp_time, interp_norm])
-            segments.append(interp_segment)
+            f = interp1d(time_norm, price_norm, kind='linear', fill_value='extrapolate')
+            interp_norm = f(interp_time)
+            # Ensure [0,1] range after interpolation (clamp)
+            interp_norm = np.clip(interp_norm, 0, 1)
+            segment = np.column_stack([interp_time, interp_norm])
+            segments.append(segment)
         return segments
 
-    def _procrustes_align(self, X, Y, max_iter=10):
-        """
-        Procrustes superimposition: translate, scale, rotate Y to best fit X.
-        Returns aligned Y and the sum of squared distances (Procrustes distance).
-        """
-        # Center both
+    def _procrustes_align(self, X, Y):
+        """Procrustes superimposition: translate, scale, rotate Y to best fit X."""
+        # Center
         X_cent = X - X.mean(axis=0)
         Y_cent = Y - Y.mean(axis=0)
         # Scale to centroid size = 1
@@ -94,17 +80,15 @@ class ShapeAnalyzer:
             return Y, np.inf
         X_scaled = X_cent / size_X
         Y_scaled = Y_cent / size_Y
-        # Orthogonal rotation (Procrustes rotation)
+        # Orthogonal rotation
         M = Y_scaled.T @ X_scaled
         U, _, Vt = np.linalg.svd(M)
         R = U @ Vt
         Y_rotated = Y_scaled @ R
-        # Compute distance (sum of squared differences)
         dist = np.sum((X_scaled - Y_rotated)**2)
         return Y_rotated, dist
 
     def compute_procrustes_matrix(self, segments):
-        """Return pairwise Procrustes distances between all segments."""
         n = len(segments)
         D = np.zeros((n, n))
         for i in range(n):
@@ -113,65 +97,76 @@ class ShapeAnalyzer:
                 D[i,j] = D[j,i] = dist
         return D
 
+    def _kmedoids(self, D, k, max_iter=100):
+        """Simple k-medoids using precomputed distance matrix."""
+        n = D.shape[0]
+        # Initialise medoids randomly
+        np.random.seed(42)
+        medoids = np.random.choice(n, k, replace=False)
+        labels = np.argmin(D[:, medoids], axis=1)
+        for _ in range(max_iter):
+            # For each cluster, find new medoid that minimises sum of distances within cluster
+            new_medoids = medoids.copy()
+            for c in range(k):
+                cluster_idx = np.where(labels == c)[0]
+                if len(cluster_idx) == 0:
+                    continue
+                # Sum of distances to each candidate
+                sum_dist = D[cluster_idx][:, cluster_idx].sum(axis=0)
+                best = cluster_idx[np.argmin(sum_dist)]
+                new_medoids[c] = best
+            # Reassign labels
+            new_labels = np.argmin(D[:, new_medoids], axis=1)
+            if np.array_equal(new_labels, labels) and np.array_equal(new_medoids, medoids):
+                break
+            medoids = new_medoids
+            labels = new_labels
+        return labels, medoids
+
     def cluster_shapes(self, segments):
-        """Cluster segments into n_clusters using k-medoids on Procrustes distances."""
         if len(segments) < self.n_clusters:
             return None, None
-        from sklearn_extra.cluster import KMedoids
         D = self.compute_procrustes_matrix(segments)
-        kmed = KMedoids(n_clusters=self.n_clusters, metric='precomputed', random_state=42)
-        labels = kmed.fit_predict(D)
-        # Compute cluster centers (medoids)
-        centers = []
-        for k in range(self.n_clusters):
-            idx = np.where(labels == k)[0][0]   # medoid index
-            centers.append(segments[idx])
+        labels, medoid_indices = self._kmedoids(D, self.n_clusters)
+        # Cluster centers are the medoid segments
+        centers = [segments[i] for i in medoid_indices]
         self.cluster_labels_ = labels
         self.cluster_centers_ = centers
         return labels, centers
 
     def classify_shape(self, segment, cluster_centers):
-        """Return closest cluster index and Procrustes distance."""
         if cluster_centers is None:
             return -1, np.inf
         best_idx = -1
         best_dist = np.inf
-        for i, center in enumerate(cluster_centers):
-            _, dist = self._procrustes_align(center, segment)
+        for i, c in enumerate(cluster_centers):
+            _, dist = self._procrustes_align(c, segment)
             if dist < best_dist:
                 best_dist = dist
                 best_idx = i
         return best_idx, best_dist
 
     def assign_shape_names(self, labels, segments):
-        """
-        Heuristic naming: compute curvature (second derivative) at midpoint.
-        V shape: negative then positive (sharp turn) – high second derivative absolute.
-        U shape: flat bottom (low curvature).
-        L shape: steep initial drop then flat (asymmetric).
-        """
+        """Heuristic naming based on curvature and slopes."""
         names = []
-        for i, seg in enumerate(segments):
-            # second derivative via finite differences
-            y = seg[:,1]
+        for seg in segments:
+            y = seg[:, 1]
             d2 = np.gradient(np.gradient(y))
-            # curvature at midpoint: absolute value of second derivative
             mid = len(d2)//2
             curv = abs(d2[mid])
-            # slope in first half vs second half
             half = len(y)//2
-            slope1 = (y[half] - y[0]) / half
-            slope2 = (y[-1] - y[half]) / half
+            slope1 = (y[half] - y[0]) / half if half > 0 else 0
+            slope2 = (y[-1] - y[half]) / (len(y)-half) if (len(y)-half)>0 else 0
             if slope1 < -0.5 and slope2 > 0.5:
                 name = "V"
             elif abs(slope1) < 0.2 and abs(slope2) < 0.2:
-                name = "L"  # flat, but not U
+                name = "L"
             elif curv < 0.5:
                 name = "U"
             else:
                 name = "mixed"
             names.append(name)
-        # Rename clusters based on majority vote
+        # Map each cluster to majority name
         cluster_name_map = {}
         for k in range(self.n_clusters):
             mask = labels == k
@@ -179,13 +174,11 @@ class ShapeAnalyzer:
                 cluster_name_map[k] = "unknown"
             else:
                 cluster_names = [names[i] for i, m in enumerate(mask) if m]
-                from collections import Counter
                 most_common = Counter(cluster_names).most_common(1)[0][0]
                 cluster_name_map[k] = most_common
         return cluster_name_map
 
     def analyze(self, prices):
-        """Full pipeline: find segments, cluster, return cluster names and centroids."""
         segments = self.find_recovery_segments(prices)
         if len(segments) < self.n_clusters:
             return {"error": "insufficient segments"}, None, None
