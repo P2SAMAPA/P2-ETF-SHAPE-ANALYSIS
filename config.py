@@ -28,15 +28,14 @@ UNIVERSES = {
 MACRO_COLS = ["VIX", "DXY", "T10Y2Y", "TBILL_3M"]
 
 # --- Shape detection parameters ---
-LOOKBACK_YEARS = 20          # Use full data from 2008 onwards
-TROUGH_WINDOW = 5            # days to define local min
-PEAK_THRESHOLD = 0.10        # recovery defined as +10% from trough
-MIN_RECOVERY_DAYS = 5        # minimum segment length
-INTERP_POINTS = 50           # number of points after interpolation
-N_CLUSTERS = 3               # V, U, L (configurable)
+LOOKBACK_YEARS = 20
+TROUGH_WINDOW = 5
+PEAK_THRESHOLD = 0.05          # lowered to 5% to capture more recoveries
+MIN_RECOVERY_DAYS = 5
+INTERP_POINTS = 50
+N_CLUSTERS = 3                 # V, U, L
 CLUSTER_NAMES = ["V", "U", "L"]
-
-PROCRUSTES_ITER = 10         # alignment iterations
+PROCRUSTES_ITER = 10
 
 # --- Output ---
 TODAY = datetime.now().strftime("%Y-%m-%d")
