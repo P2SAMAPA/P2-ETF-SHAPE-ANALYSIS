@@ -1,5 +1,6 @@
 """
-Shape analysis with cluster‑based naming.
+Shape analysis using Kendall's shape space and Procrustes distance.
+Detects recovery segments, aligns them, classifies into V/U/L shapes using relative sharpness.
 """
 
 import numpy as np
@@ -19,20 +20,24 @@ class ShapeAnalyzer:
         self.cluster_labels_ = None
 
     def find_recovery_segments(self, prices):
-        # (same as before – no change)
+        """prices: pd.Series indexed by datetime."""
         segments = []
         values = prices.values
         n = len(values)
+
+        # Find troughs (local minima over window)
         trough_idx = []
         for i in range(self.trough_window, n - self.trough_window):
             window = values[i - self.trough_window : i + self.trough_window + 1]
             if values[i] == min(window):
                 trough_idx.append(i)
+
         if not trough_idx:
             return []
+
         for ti in trough_idx:
             trough_price = values[ti]
-            max_lookahead = min(n, ti + 252)
+            max_lookahead = min(n, ti + 252)  # up to one year
             peak_candidate = None
             for j in range(ti+1, max_lookahead):
                 if values[j] >= trough_price * (1 + self.peak_threshold):
@@ -43,20 +48,25 @@ class ShapeAnalyzer:
             segment_prices = values[ti:peak_candidate+1]
             if len(segment_prices) < self.min_recovery_days:
                 continue
+            # Normalise time to [0,1]
             time_norm = np.linspace(0, 1, len(segment_prices))
+            # Normalise price to [0,1]
             pmin = segment_prices.min()
             pmax = segment_prices.max()
             if pmax == pmin:
                 continue
             price_norm = (segment_prices - pmin) / (pmax - pmin)
+            # Interpolate to fixed number of points
             interp_time = np.linspace(0, 1, self.interp_points)
             f = interp1d(time_norm, price_norm, kind='linear', fill_value='extrapolate')
             interp_norm = f(interp_time)
             interp_norm = np.clip(interp_norm, 0, 1)
-            segments.append(np.column_stack([interp_time, interp_norm]))
+            segment = np.column_stack([interp_time, interp_norm])
+            segments.append(segment)
         return segments
 
     def _procrustes_align(self, X, Y):
+        """Procrustes superimposition: translate, scale, rotate Y to best fit X."""
         X_cent = X - X.mean(axis=0)
         Y_cent = Y - Y.mean(axis=0)
         size_X = np.sqrt(np.sum(X_cent**2))
@@ -124,26 +134,34 @@ class ShapeAnalyzer:
                 best_idx = i
         return best_idx, best_dist
 
-    def _name_cluster_from_center(self, center):
-        """Return V, U, or L based on the shape of the cluster center."""
-        y = center[:, 1]
-        half = len(y)//2
-        if half == 0:
-            return "L"
-        slope1 = (y[half] - y[0]) / half
-        slope2 = (y[-1] - y[half]) / (len(y)-half)
-        curv = np.abs(np.gradient(np.gradient(y))).mean()
-        # Rule-based naming
-        if slope1 < -0.2 and slope2 > 0.2:
-            return "V"
-        elif curv < 0.5 and abs(slope1) < 0.1 and abs(slope2) < 0.1:
-            return "U"
-        else:
-            return "L"
-
     def assign_cluster_names(self, centers):
-        """Return dict mapping cluster index to shape name."""
-        return {i: self._name_cluster_from_center(center) for i, center in enumerate(centers)}
+        """
+        Assign V, U, L to clusters based on a sharpness score.
+        Higher sharpness = more V‑like.
+        """
+        scores = []
+        for center in centers:
+            y = center[:, 1]
+            half = len(y)//2
+            if half == 0:
+                scores.append(0.0)
+                continue
+            slope1 = (y[half] - y[0]) / half
+            slope2 = (y[-1] - y[half]) / (len(y)-half)
+            curv = np.abs(np.gradient(np.gradient(y))).mean()
+            sharpness = (slope2 - slope1) / (curv + 1e-6)
+            scores.append(sharpness)
+        # Sort by sharpness descending
+        order = np.argsort(scores)[::-1]
+        name_map = {}
+        for rank, idx in enumerate(order):
+            if rank == 0:
+                name_map[idx] = "V"
+            elif rank == 1:
+                name_map[idx] = "U"
+            else:
+                name_map[idx] = "L"
+        return name_map
 
     def analyze(self, prices):
         segments = self.find_recovery_segments(prices)
