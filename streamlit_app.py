@@ -89,49 +89,47 @@ if not universes:
     st.warning("No universe data.")
     st.stop()
 
-# ================== RECOMMENDATION SECTION ==================
-st.header("🎯 Top ETFs to Buy (based on shape confidence and Procrustes distance)")
+# ================== TOP PICKS PER UNIVERSE ==================
+st.header("🎯 Top ETF Picks per Universe")
 
-all_recommendations = []
 for universe_name, uni_data in universes.items():
+    if not uni_data:
+        continue
+    recs = []
     for ticker, info in uni_data.items():
         shape = info.get("current_shape", "?")
         score = shape_to_score(shape)
         confidence = info.get("confidence", 0.0)
         composite = score * confidence
-        all_recommendations.append({
-            "Universe": universe_name,
+        recs.append({
             "Ticker": ticker,
             "Shape": shape,
             "Action": shape_to_action(shape),
             "Confidence": f"{confidence*100:.1f}%",
             "Procrustes Dist": f"{info['procrustes_distance']:.3f}",
-            "Composite Score": composite,
-            "confidence_raw": confidence,
-            "distance": info['procrustes_distance']
+            "Composite Score": composite
         })
-df_rec = pd.DataFrame(all_recommendations)
-df_rec = df_rec.sort_values("Composite Score", ascending=False)
-top3 = df_rec.head(3)
+    df_univ = pd.DataFrame(recs)
+    df_univ = df_univ.sort_values("Composite Score", ascending=False)
+    top_n = df_univ.head(3)  # show up to 3 per universe
 
-# Display top 3 as hero cards – use enumerate for sequential column index
-cols = st.columns(3)
-for idx, (_, row) in enumerate(top3.iterrows()):
-    with cols[idx]:
-        st.markdown(f"##### {row['Universe']} – {row['Ticker']}")
-        st.markdown(f"**Action:** {row['Action']}")
-        st.markdown(f"**Confidence:** {row['Confidence']}")
-        st.markdown(f"**Procrustes distance:** {row['Procrustes Dist']}")
-        st.markdown(f"**Shape:** {row['Shape']}")
-        if row['Action'] == "BUY":
-            st.markdown('<div class="buy">BUY SIGNAL</div>', unsafe_allow_html=True)
-        elif row['Action'] == "HOLD":
-            st.markdown('<div class="hold">HOLD SIGNAL</div>', unsafe_allow_html=True)
-        else:
-            st.markdown('<div class="sell">SELL SIGNAL</div>', unsafe_allow_html=True)
-st.divider()
+    st.subheader(f"📌 {universe_name}")
+    cols = st.columns(min(3, len(top_n)))
+    for idx, (_, row) in enumerate(top_n.iterrows()):
+        with cols[idx]:
+            st.markdown(f"##### {row['Ticker']}")
+            st.markdown(f"**Shape:** {row['Shape']} → {row['Action']}")
+            st.markdown(f"**Confidence:** {row['Confidence']}")
+            st.markdown(f"**Procrustes dist:** {row['Procrustes Dist']}")
+            if row['Action'] == "BUY":
+                st.markdown('<div class="buy">BUY SIGNAL</div>', unsafe_allow_html=True)
+            elif row['Action'] == "HOLD":
+                st.markdown('<div class="hold">HOLD SIGNAL</div>', unsafe_allow_html=True)
+            else:
+                st.markdown('<div class="sell">SELL SIGNAL</div>', unsafe_allow_html=True)
+    st.divider()
 
-# ================== UNIVERSE SELECTION ==================
+# ================== DETAILED VIEW PER UNIVERSE ==================
 universe_names = list(universes.keys())
 selected = st.selectbox("Select Universe to view details", universe_names)
 
@@ -199,4 +197,4 @@ if selected:
         else:
             st.info("No shape data available for this ETF.")
 
-st.caption("Top recommendation uses composite score = shape_score (V=1, U=0, L=-1) × confidence. Higher is better for buying. Data from " + OUTPUT_REPO)
+st.caption("Top picks per universe sorted by composite score = shape_score (V=1, U=0, L=-1) × confidence. Data from " + OUTPUT_REPO)
