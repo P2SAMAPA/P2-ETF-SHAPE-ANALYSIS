@@ -114,10 +114,10 @@ df_rec = pd.DataFrame(all_recommendations)
 df_rec = df_rec.sort_values("Composite Score", ascending=False)
 top3 = df_rec.head(3)
 
-# Display top 3 as hero cards
+# Display top 3 as hero cards – use enumerate for sequential column index
 cols = st.columns(3)
-for i, row in top3.iterrows():
-    with cols[i]:
+for idx, (_, row) in enumerate(top3.iterrows()):
+    with cols[idx]:
         st.markdown(f"##### {row['Universe']} – {row['Ticker']}")
         st.markdown(f"**Action:** {row['Action']}")
         st.markdown(f"**Confidence:** {row['Confidence']}")
