@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import json
+import numpy as np  # <-- ADDED
 import plotly.express as px
 import plotly.graph_objects as go
 from huggingface_hub import HfFileSystem
@@ -11,7 +12,7 @@ st.set_page_config(page_title="Shape Theoretic Analysis", layout="wide")
 st.title("📐 Morphological Shape Analysis")
 st.caption("Kendall's shape space | Procrustes distance | Recovery pattern classification (V, U, L)")
 
-# Custom CSS for better readability (optional)
+# Custom CSS
 st.markdown("""
 <style>
     .metric-card { background-color: #f0f2f6; padding: 0.5rem; border-radius: 0.5rem; text-align: center; }
@@ -104,20 +105,24 @@ if selected:
 
         st.markdown("**Cluster distribution:**")
         cluster_df = pd.DataFrame([
-            {"Cluster": name, "Count": info['cluster_distribution'].get(str(k),0)}
+            {"Cluster": name, "Count": info['cluster_distribution'].get(str(k), 0)}
             for k, name in info['cluster_names'].items()
         ])
         st.bar_chart(cluster_df.set_index("Cluster"))
 
-        # Plot the last recovery shape (normalized)
-        last_seg = np.array(info["last_recovery_normalized"])
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=last_seg[:,0], y=last_seg[:,1], mode='lines+markers',
-                                 name=f"{ticker} - last recovery", line=dict(width=3)))
-        fig.update_layout(title="Normalised recovery shape (trough → peak)",
-                          xaxis_title="Normalised time",
-                          yaxis_title="Normalised price",
-                          height=400)
-        st.plotly_chart(fig, use_container_width=True)
+        # Plot the last recovery shape if available
+        last_seg = info.get("last_recovery_normalized")
+        if last_seg and len(last_seg) > 0:
+            last_seg = np.array(last_seg)
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=last_seg[:,0], y=last_seg[:,1], mode='lines+markers',
+                                     name=f"{ticker} - last recovery", line=dict(width=3)))
+            fig.update_layout(title="Normalised recovery shape (trough → peak)",
+                              xaxis_title="Normalised time",
+                              yaxis_title="Normalised price",
+                              height=400)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No shape data available for this ETF.")
 
 st.caption(f"Data from {OUTPUT_REPO} | V = sharp rebound, U = flat bottom, L = gradual recovery")
