@@ -1,3 +1,8 @@
+"""
+Main training script for shape analysis.
+For each ETF, detect recovery segments, cluster shapes, and classify the most recent incomplete recovery.
+"""
+
 import pandas as pd
 import numpy as np
 import json
@@ -13,14 +18,17 @@ def main():
         return
 
     df = data_manager.load_master_data()
+    prices = data_manager.prepare_prices_matrix(df, [])  # will be updated later per universe
     all_results = {}
 
     for universe_name, tickers in config.UNIVERSES.items():
         print(f"\n=== Universe: {universe_name} ===")
-        # Get prices for these tickers only
-        uni_prices = data_manager.prepare_prices_matrix(df, tickers)
+        # Filter prices for the current universe
+        uni_prices = prices[tickers] if all(t in prices.columns for t in tickers) else pd.DataFrame()
         if uni_prices.empty:
-            print(f"  No price data for universe, skipping.")
+            # Fallback: prepare using data_manager with specific tickers
+            uni_prices = data_manager.prepare_prices_matrix(df, tickers)
+        if uni_prices.empty:
             continue
 
         universe_results = {}
@@ -29,7 +37,7 @@ def main():
                 continue
             price_series = uni_prices[ticker].dropna()
             if len(price_series) < 100:
-                print(f"  {ticker}: insufficient data ({len(price_series)} days)")
+                print(f"  {ticker}: insufficient data ({len(price_series)} points)")
                 continue
 
             sa = ShapeAnalyzer(
@@ -42,14 +50,15 @@ def main():
             )
             result, centers, labels = sa.analyze(price_series)
             if "error" in result:
-                print(f"  {ticker}: {result['error']}")
+                print(f"  {ticker}: {result['error']} (recoveries={result.get('num_recoveries',0)})")
                 continue
+            else:
+                print(f"  {ticker}: {result['num_recoveries']} recoveries, {len(labels)} clusters")
 
+            # Classify the most recent recovery (last segment)
             all_segments = result["segments"]
             if len(all_segments) == 0:
-                print(f"  {ticker}: no recovery segments found")
                 continue
-
             last_segment = all_segments[-1]
             closest_cluster, dist = sa.classify_shape(last_segment, centers)
             shape_name = result["cluster_names"].get(closest_cluster, "unknown")
@@ -59,17 +68,12 @@ def main():
                 "current_shape": shape_name,
                 "confidence": float(confidence),
                 "procrustes_distance": float(dist),
-                "num_recoveries": len(all_segments),
+                "num_recoveries": result["num_recoveries"],
                 "cluster_distribution": {str(k): int((labels == k).sum()) for k in range(config.N_CLUSTERS)},
                 "cluster_names": result["cluster_names"],
                 "last_recovery_normalized": last_segment.tolist()
             }
-        if universe_results:
-            all_results[universe_name] = universe_results
-
-    if not all_results:
-        print("No results generated for any universe.")
-        return
+        all_results[universe_name] = universe_results
 
     Path("results").mkdir(exist_ok=True)
     local_path = Path(f"results/shape_analysis_{config.TODAY}.json")
