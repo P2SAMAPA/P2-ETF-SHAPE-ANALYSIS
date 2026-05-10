@@ -1,8 +1,3 @@
-"""
-Main training script for shape analysis.
-For each ETF, detect recovery segments, cluster shapes, and classify the most recent incomplete recovery.
-"""
-
 import pandas as pd
 import numpy as np
 import json
@@ -18,13 +13,14 @@ def main():
         return
 
     df = data_manager.load_master_data()
-    prices = data_manager.prepare_prices_matrix(df, [])
     all_results = {}
 
     for universe_name, tickers in config.UNIVERSES.items():
         print(f"\n=== Universe: {universe_name} ===")
-        uni_prices = prices[tickers].dropna(how='all')
+        # Get prices for these tickers only
+        uni_prices = data_manager.prepare_prices_matrix(df, tickers)
         if uni_prices.empty:
+            print(f"  No price data for universe, skipping.")
             continue
 
         universe_results = {}
@@ -33,6 +29,7 @@ def main():
                 continue
             price_series = uni_prices[ticker].dropna()
             if len(price_series) < 100:
+                print(f"  {ticker}: insufficient data ({len(price_series)} days)")
                 continue
 
             sa = ShapeAnalyzer(
@@ -48,14 +45,14 @@ def main():
                 print(f"  {ticker}: {result['error']}")
                 continue
 
-            # Classify the most recent (incomplete) recovery: last segment
             all_segments = result["segments"]
             if len(all_segments) == 0:
+                print(f"  {ticker}: no recovery segments found")
                 continue
+
             last_segment = all_segments[-1]
             closest_cluster, dist = sa.classify_shape(last_segment, centers)
             shape_name = result["cluster_names"].get(closest_cluster, "unknown")
-            # Confidence: lower dist = higher confidence (inverse)
             confidence = 1.0 / (1.0 + dist) if dist < 1e8 else 0.0
 
             universe_results[ticker] = {
@@ -65,9 +62,14 @@ def main():
                 "num_recoveries": len(all_segments),
                 "cluster_distribution": {str(k): int((labels == k).sum()) for k in range(config.N_CLUSTERS)},
                 "cluster_names": result["cluster_names"],
-                "last_recovery_normalized": last_segment.tolist()   # for plotting
+                "last_recovery_normalized": last_segment.tolist()
             }
-        all_results[universe_name] = universe_results
+        if universe_results:
+            all_results[universe_name] = universe_results
+
+    if not all_results:
+        print("No results generated for any universe.")
+        return
 
     Path("results").mkdir(exist_ok=True)
     local_path = Path(f"results/shape_analysis_{config.TODAY}.json")
