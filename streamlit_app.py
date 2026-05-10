@@ -22,10 +22,18 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Helper to map shape to action
 def shape_to_action(shape):
     mapping = {"V": "BUY", "U": "HOLD", "L": "SELL"}
     return mapping.get(shape, "HOLD")
+
+def color_action(val):
+    if val == "BUY":
+        return 'background-color: #c6f7d0; color: #0e6b0e; font-weight: bold;'
+    elif val == "HOLD":
+        return 'background-color: #fff3c4; color: #b45f06;'
+    elif val == "SELL":
+        return 'background-color: #fdd; color: #a00;'
+    return ''
 
 OUTPUT_REPO = config.OUTPUT_REPO
 HF_TOKEN = config.HF_TOKEN
@@ -86,7 +94,6 @@ if selected:
         st.write("No data for this universe.")
         st.stop()
     
-    # Build DataFrame with action
     rows = []
     for ticker, info in uni_data.items():
         shape = info.get("current_shape", "?")
@@ -101,21 +108,11 @@ if selected:
         })
     df = pd.DataFrame(rows)
     
-    # Apply coloured background for Action column using styling
-    def color_action(val):
-        if val == "BUY":
-            return 'background-color: #c6f7d0'
-        elif val == "HOLD":
-            return 'background-color: #fff3c4'
-        elif val == "SELL":
-            return 'background-color: #fdd'
-        return ''
-    
+    # Apply styling using .map (new pandas) instead of .applymap (deprecated)
+    styled_df = df.style.map(color_action, subset=['Action'])
     st.subheader(f"📊 Trading Signals – {selected}")
-    styled_df = df.style.applymap(color_action, subset=['Action'])
     st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
-    # Explanation of normalised axes
     with st.expander("📘 What does 'Normalised time' mean?"):
         st.markdown("""
         - **Normalised time** scales each recovery to start at 0 (trough) and end at 1 (peak).  
@@ -124,7 +121,6 @@ if selected:
         - The shape tells you *how* the price recovered, not the calendar length.
         """)
 
-    # Detailed view for selected ETF
     ticker = st.selectbox("Select ETF for details", df["ETF"].tolist())
     if ticker:
         info = uni_data[ticker]
@@ -143,7 +139,6 @@ if selected:
         ])
         st.bar_chart(cluster_df.set_index("Shape Type"))
 
-        # Plot the last recovery shape
         last_seg = info.get("last_recovery_normalized")
         if last_seg and len(last_seg) > 0:
             last_seg = np.array(last_seg)
