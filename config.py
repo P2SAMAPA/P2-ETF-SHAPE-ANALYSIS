@@ -14,7 +14,7 @@ OUTPUT_REPO = "P2SAMAPA/p2-etf-shape-analysis-results"
 FI_COMMODITIES = ["TLT", "VCIT", "LQD", "HYG", "VNQ", "GLD", "SLV"]
 EQUITY_SECTORS = [
     "SPY", "QQQ", "XLK", "XLF", "XLE", "XLV", "XLI", "XLY", "XLP", "XLU",
-    "GDX", "XME", "IWF", "XSD", "XBI", "IWM"
+    "GDX", "XME", "IWF", "XSD", "XBI", "IWM", "IWD", "IWO"
 ]
 COMBINED = list(set(FI_COMMODITIES + EQUITY_SECTORS))
 
