@@ -10,7 +10,7 @@ from collections import Counter
 import warnings
 
 class ShapeAnalyzer:
-    def __init__(self, trough_window=5, peak_threshold=0.10, min_recovery_days=5,
+    def __init__(self, trough_window=5, peak_threshold=0.05, min_recovery_days=5,
                  interp_points=50, n_clusters=3, procrustes_iter=10):
         self.trough_window = trough_window
         self.peak_threshold = peak_threshold
@@ -62,7 +62,6 @@ class ShapeAnalyzer:
             interp_time = np.linspace(0, 1, self.interp_points)
             f = interp1d(time_norm, price_norm, kind='linear', fill_value='extrapolate')
             interp_norm = f(interp_time)
-            # Ensure [0,1] range after interpolation (clamp)
             interp_norm = np.clip(interp_norm, 0, 1)
             segment = np.column_stack([interp_time, interp_norm])
             segments.append(segment)
@@ -70,17 +69,14 @@ class ShapeAnalyzer:
 
     def _procrustes_align(self, X, Y):
         """Procrustes superimposition: translate, scale, rotate Y to best fit X."""
-        # Center
         X_cent = X - X.mean(axis=0)
         Y_cent = Y - Y.mean(axis=0)
-        # Scale to centroid size = 1
         size_X = np.sqrt(np.sum(X_cent**2))
         size_Y = np.sqrt(np.sum(Y_cent**2))
         if size_X < 1e-8 or size_Y < 1e-8:
             return Y, np.inf
         X_scaled = X_cent / size_X
         Y_scaled = Y_cent / size_Y
-        # Orthogonal rotation
         M = Y_scaled.T @ X_scaled
         U, _, Vt = np.linalg.svd(M)
         R = U @ Vt
@@ -98,24 +94,19 @@ class ShapeAnalyzer:
         return D
 
     def _kmedoids(self, D, k, max_iter=100):
-        """Simple k-medoids using precomputed distance matrix."""
         n = D.shape[0]
-        # Initialise medoids randomly
         np.random.seed(42)
         medoids = np.random.choice(n, k, replace=False)
         labels = np.argmin(D[:, medoids], axis=1)
         for _ in range(max_iter):
-            # For each cluster, find new medoid that minimises sum of distances within cluster
             new_medoids = medoids.copy()
             for c in range(k):
                 cluster_idx = np.where(labels == c)[0]
                 if len(cluster_idx) == 0:
                     continue
-                # Sum of distances to each candidate
                 sum_dist = D[cluster_idx][:, cluster_idx].sum(axis=0)
                 best = cluster_idx[np.argmin(sum_dist)]
                 new_medoids[c] = best
-            # Reassign labels
             new_labels = np.argmin(D[:, new_medoids], axis=1)
             if np.array_equal(new_labels, labels) and np.array_equal(new_medoids, medoids):
                 break
@@ -128,7 +119,6 @@ class ShapeAnalyzer:
             return None, None
         D = self.compute_procrustes_matrix(segments)
         labels, medoid_indices = self._kmedoids(D, self.n_clusters)
-        # Cluster centers are the medoid segments
         centers = [segments[i] for i in medoid_indices]
         self.cluster_labels_ = labels
         self.cluster_centers_ = centers
@@ -147,7 +137,9 @@ class ShapeAnalyzer:
         return best_idx, best_dist
 
     def assign_shape_names(self, labels, segments):
-        """Heuristic naming based on curvature and slopes."""
+        """
+        Heuristic naming based on curvature and slopes – relaxed for better differentiation.
+        """
         names = []
         for seg in segments:
             y = seg[:, 1]
@@ -157,16 +149,14 @@ class ShapeAnalyzer:
             half = len(y)//2
             slope1 = (y[half] - y[0]) / half if half > 0 else 0
             slope2 = (y[-1] - y[half]) / (len(y)-half) if (len(y)-half)>0 else 0
-            if slope1 < -0.5 and slope2 > 0.5:
+            # Relaxed thresholds
+            if slope1 < -0.3 and slope2 > 0.3:
                 name = "V"
-            elif abs(slope1) < 0.2 and abs(slope2) < 0.2:
-                name = "L"
-            elif curv < 0.5:
+            elif curv < 0.8 and abs(slope1) < 0.1 and abs(slope2) < 0.1:
                 name = "U"
             else:
-                name = "mixed"
+                name = "L"
             names.append(name)
-        # Map each cluster to majority name
         cluster_name_map = {}
         for k in range(self.n_clusters):
             mask = labels == k
@@ -181,7 +171,12 @@ class ShapeAnalyzer:
     def analyze(self, prices):
         segments = self.find_recovery_segments(prices)
         if len(segments) < self.n_clusters:
-            return {"error": "insufficient segments"}, None, None
+            return {"error": "insufficient segments", "num_recoveries": len(segments)}, None, None
         labels, centers = self.cluster_shapes(segments)
         name_map = self.assign_shape_names(labels, segments)
-        return {"segments": segments, "labels": labels, "cluster_names": name_map}, centers, labels
+        return {
+            "segments": segments,
+            "labels": labels,
+            "cluster_names": name_map,
+            "num_recoveries": len(segments)
+        }, centers, labels
