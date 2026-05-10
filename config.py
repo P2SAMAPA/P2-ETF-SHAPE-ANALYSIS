@@ -24,17 +24,14 @@ UNIVERSES = {
     "COMBINED": COMBINED
 }
 
-# --- Macro features (compatibility) ---
 MACRO_COLS = ["VIX", "DXY", "T10Y2Y", "TBILL_3M"]
 
 # --- Shape detection parameters ---
-LOOKBACK_YEARS = 20
 TROUGH_WINDOW = 5
-PEAK_THRESHOLD = 0.05          # lowered to 5% to capture more recoveries
+PEAK_THRESHOLD = 0.08          # 8% – captures stronger recoveries
 MIN_RECOVERY_DAYS = 5
 INTERP_POINTS = 50
 N_CLUSTERS = 3                 # V, U, L
-CLUSTER_NAMES = ["V", "U", "L"]
 PROCRUSTES_ITER = 10
 
 # --- Output ---
