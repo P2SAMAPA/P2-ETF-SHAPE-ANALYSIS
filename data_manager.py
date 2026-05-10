@@ -20,10 +20,14 @@ def load_master_data() -> pd.DataFrame:
 
 def prepare_prices_matrix(df_wide: pd.DataFrame, tickers: list) -> pd.DataFrame:
     """Return wide‑format closing prices for given tickers."""
-    # Ensure we have the required columns
+    if not tickers:
+        return pd.DataFrame()
     available = [t for t in tickers if t in df_wide.columns]
     if not available:
         raise ValueError(f"None of the tickers {tickers} found in data.")
+    # Ensure Date column exists and set as index
+    if 'Date' not in df_wide.columns:
+        df_wide = df_wide.reset_index()
     return df_wide[['Date'] + available].set_index('Date')[available].dropna(how='all')
 
 def prepare_macro_features(df_wide: pd.DataFrame) -> pd.DataFrame:
